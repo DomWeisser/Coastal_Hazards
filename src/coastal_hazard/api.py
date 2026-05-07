@@ -4,9 +4,6 @@ from datetime import timedelta
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from .pipeline import run_resilience_analysis, run_resilience_pipeline
-from .visualization import save_before_after_maps, save_flood_maps
-
 app = FastAPI(title="Global Coastal Hazard AI")
 
 
@@ -33,6 +30,9 @@ def health() -> dict:
 
 @app.post("/resilience-report")
 def resilience_report(req: ResilienceRequest) -> dict:
+    # Lazy import keeps process startup light on memory-constrained hosts.
+    from .pipeline import run_resilience_pipeline
+
     report = run_resilience_pipeline(
         event_name=req.event_name,
         bbox=req.bbox,
@@ -45,6 +45,10 @@ def resilience_report(req: ResilienceRequest) -> dict:
 
 @app.post("/resilience-maps")
 def resilience_maps(req: ResilienceRequest) -> dict:
+    # Lazy imports defer heavyweight geospatial/model modules until needed.
+    from .pipeline import run_resilience_analysis
+    from .visualization import save_before_after_maps, save_flood_maps
+
     post = run_resilience_analysis(
         event_name=req.event_name,
         bbox=req.bbox,
