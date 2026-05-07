@@ -1,0 +1,245 @@
+Metadata-Version: 2.4
+Name: global-coastal-hazard-ai
+Version: 0.1.0
+Summary: Flood segmentation and resilience reporting with Prithvi + Planetary Computer
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
+# Global Coastal Hazard AI (Prithvi-100M)
+
+End-to-end starter pipeline for flood mapping and resilience reporting using:
+- Microsoft Planetary Computer (Sentinel-2 L2A via STAC)
+- NASA/IBM Prithvi foundation model (segmentation checkpoint)
+- FastAPI for production API serving
+
+Target case study:
+- Event: Cyclone Remal, Bangladesh, May 2024
+- Bounding box: `[88.5, 21.5, 89.5, 22.8]`
+
+---
+
+## 1) Environment Setup (Windows / PowerShell)
+
+### 1.1 Install prerequisites
+1. Install Python 3.10+.
+2. Install Git for Windows.
+3. Optional but recommended: install [GitHub CLI](https://cli.github.com/).
+
+### 1.2 Create and activate virtual environment
+From project root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pip install -e .
+```
+
+If script execution is blocked:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+---
+
+## 2) Project Structure
+
+```text
+Coastal_Hazard/
+  requirements.txt
+  pyproject.toml
+  README.md
+  src/
+    coastal_hazard/
+      __init__.py
+      data_fetcher.py
+      data_fetcher_cli.py
+      prithvi_segmenter.py
+      report.py
+      pipeline.py
+      api.py
+```
+
+---
+
+## 3) What Each Module Does
+
+- `data_fetcher.py`
+  - Accepts JSON-style `bbox` and date range.
+  - Queries Planetary Computer STAC (`sentinel-2-l2a`).
+  - Implements least-cloud pixel compositing using:
+    - scene sorting by `eo:cloud_cover`
+    - per-pixel clear filtering via `SCL` classes
+    - `combine_first` to keep first valid clear pixel.
+
+- `prithvi_segmenter.py`
+  - Loads a Prithvi-based segmentation checkpoint from Hugging Face.
+  - Runs inference to produce a flood mask.
+
+- `report.py`
+  - Converts flood pixels to area in square kilometers.
+  - Formats `ResilienceReport`.
+
+- `pipeline.py`
+  - Orchestrates fetch -> composite -> segmentation -> area calculation.
+
+- `api.py`
+  - Exposes FastAPI endpoint `/resilience-report`.
+
+---
+
+## 4) Step-by-Step Workflow (Mini Steps)
+
+### Step A: Verify `data_fetcher.py` accepts JSON bbox and date range
+You can test with:
+
+```powershell
+python -m coastal_hazard.data_fetcher_cli `
+  --bbox "[88.5,21.5,89.5,22.8]" `
+  --start-date "2024-05-20" `
+  --end-date "2024-05-31"
+```
+
+What happens internally:
+1. Parse string bbox JSON into float array.
+2. Validate ordering `[min_lon, min_lat, max_lon, max_lat]`.
+3. Query STAC with collection + bbox + date range.
+4. Load B03, B08, SCL bands.
+5. Sort scenes by `eo:cloud_cover`.
+6. Keep clear SCL classes.
+7. Build least-cloud per-pixel composite.
+
+### Step B: Run segmentation with Prithvi
+Default model ID in code:
+- `ibm-nasa-geospatial/Prithvi-100M-sen1floods11`
+
+If your preferred checkpoint differs, pass `model_id` in API request.
+
+### Step C: Compute flooded square km
+1. Predicted flood mask has binary values (`1=flood`).
+2. Pixel area estimated from x/y spacing.
+3. `flood_area_sqkm = flood_pixels * pixel_area_sqm / 1,000,000`.
+
+### Step D: Expose API
+Run server:
+
+```powershell
+uvicorn coastal_hazard.api:app --reload --app-dir src
+```
+
+Open docs:
+- `http://127.0.0.1:8000/docs`
+
+### Step E: Call resilience report endpoint
+PowerShell example:
+
+```powershell
+$body = @{
+  event_name = "Cyclone Remal Bangladesh"
+  bbox = @(88.5, 21.5, 89.5, 22.8)
+  start_date = "2024-05-20"
+  end_date = "2024-05-31"
+  model_id = "ibm-nasa-geospatial/Prithvi-100M-sen1floods11"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/resilience-report" `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+Expected response fields:
+- `flooded_area_sqkm`
+- `flood_pixel_count`
+- `pixel_area_sqm`
+- case metadata (`event_name`, `bbox`, dates)
+
+---
+
+## 5) Cyclone Remal Case Study Checklist
+
+Use this exact run configuration:
+- bbox: `[88.5, 21.5, 89.5, 22.8]`
+- start date: `2024-05-20`
+- end date: `2024-05-31`
+
+Validation checklist:
+1. Confirm STAC returns multiple scenes.
+2. Confirm composite has minimal cloud holes.
+3. Confirm mask values are binary (`0/1`).
+4. Confirm flood area is plausible for coastal delta context.
+5. Save JSON report to `reports/remal_2024_report.json` for auditability.
+
+---
+
+## 6) Git + GitHub (Detailed)
+
+### 6.1 Initialize repo
+```powershell
+git init
+git add .
+git commit -m "Initial Global Coastal Hazard AI pipeline with Prithvi + API"
+```
+
+### 6.2 Create `.gitignore`
+Recommended contents:
+
+```gitignore
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+*.ipynb_checkpoints
+```
+
+### 6.3 Create remote GitHub repository
+Option A: GitHub CLI
+```powershell
+gh repo create Coastal_Hazard --public --source . --remote origin --push
+```
+
+Option B: Web UI
+1. Create new empty repo in GitHub.
+2. Copy HTTPS URL.
+3. Run:
+```powershell
+git remote add origin <YOUR_GITHUB_URL>
+git branch -M main
+git push -u origin main
+```
+
+### 6.4 Ongoing workflow
+```powershell
+git status
+git add .
+git commit -m "Add improvement: <message>"
+git push
+```
+
+---
+
+## 7) Production Hardening (Recommended Next)
+
+1. Add model/version pinning so exact checkpoint is reproducible.
+2. Add retries around STAC requests and item loading.
+3. Reproject to a metric CRS before area computation for best geodetic accuracy.
+4. Add unit tests:
+   - bbox parser
+   - cloud composite logic
+   - area calculation.
+5. Add Dockerfile and deploy API.
+
+---
+
+## 8) Notes on Generalization Claim
+
+To support your "generalization to South Asia delta complexity" claim, document:
+1. Exact data window and bbox.
+2. Model checkpoint and version hash.
+3. Preprocessing/compositing method.
+4. Comparative baseline (for example NDWI thresholding only).
+5. Optional reference labels (Sen1Floods11/local annotated polygons) and metrics.
+
